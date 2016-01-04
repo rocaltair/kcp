@@ -3,6 +3,12 @@
 #include <stdlib.h>
 #include <lua.h>
 #include <lauxlib.h>
+#if defined(WIN32) || defined(_WIN32)
+# include <windows.h>
+#else
+# include <sys/time.h>
+# include <unistd.h>
+#endif /* if defined(WIN32) || defined(_WIN32) */
 #include "ikcp.h"
 
 /*
@@ -69,6 +75,60 @@
 	XX(IKCP_LOG_OUT_DATA) XX(IKCP_LOG_OUT_ACK)        \
 	XX(IKCP_LOG_OUT_PROBE) XX(IKCP_LOG_OUT_WINS)
 
+static int lua__sleep(lua_State *L)
+{
+        int ms = luaL_optinteger(L, 1, 0);
+#if defined(WIN32) || defined(_WIN32)
+        Sleep(ms);
+#else
+        usleep((useconds_t)ms * 1000);
+#endif
+        lua_pushboolean(L, 1);
+        return 1;
+}
+
+static inline void itimeofday(long *sec, long *usec)
+{
+#if defined(WIN32) || defined(_WIN32)
+	static long mode = 0, addsec = 0;
+	BOOL retval;
+	static IINT64 freq = 1;
+	IINT64 qpc;
+	if (mode == 0) {
+		retval = QueryPerformanceFrequency((LARGE_INTEGER*)&freq);
+		freq = (freq == 0)? 1 : freq;
+		retval = QueryPerformanceCounter((LARGE_INTEGER*)&qpc);
+		addsec = (long)time(NULL);
+		addsec = addsec - (long)((qpc / freq) & 0x7fffffff);
+		mode = 1;
+	}
+	retval = QueryPerformanceCounter((LARGE_INTEGER*)&qpc);
+	retval = retval * 2;
+	if (sec) *sec = (long)(qpc / freq) + addsec;
+	if (usec) *usec = (long)((qpc % freq) * 1000000 / freq);
+#else
+	struct timeval time;
+	gettimeofday(&time, NULL);
+	if (sec) *sec = time.tv_sec;
+	if (usec) *usec = time.tv_usec;
+#endif
+}
+
+static uint64_t iclock64(void)
+{
+	long s, u;
+	uint64_t value;
+	itimeofday(&s, &u);
+	value = ((uint64_t)s) * 1000 + (u / 1000);
+	return value;
+}
+
+static uint32_t iclock()
+{
+	return (uint32_t)(iclock64() & 0xfffffffful);
+}
+
+
 static lua_State * get_main_state(lua_State *L)
 {
 	lua_rawgeti(L,  LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
@@ -77,54 +137,58 @@ static lua_State * get_main_state(lua_State *L)
 	return mL;
 }
 
-static int udp_output(const char *buf, int len, ikcpcb *peer, void *user)
+static int output_cb(const char *buf, int len, ikcpcb *peer, void *user)
 {
-	IUINT32 conv = peer->conv;
 	lua_State * sL = user;
 	/* main State */
 	lua_State * L = get_main_state(sL);
 	int top;
 	int ret = -1;
+	double ptr = (double)(int64_t)peer;
 	assert(L != NULL);
 	top = lua_gettop(L);
 	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, conv);
+	lua_pushnumber(L, ptr);
 	lua_rawget(L, -2);
 	if (lua_type(L, -1) != LUA_TUSERDATA) {
-		goto err;
+		goto finished;
 	}
 	lua_getfenv(L, -1);
 	if (!lua_istable(L, -1)) {
-		goto err;
+		goto finished;
 	}
 	lua_getfield(L, -1, LIKCP_OUTPUT_CB);
 	if (!lua_isfunction(L, -1)) {
 		DLOG("output_cb not found")
-		goto err;
+		goto finished;
 	}
 	lua_pushvalue(L, -3);
 	lua_pushlstring(L, buf, len);
 	ret = lua_pcall(L, 2, 0, 0);
-err:
+finished:
 	lua_settop(L, top);
 	return ret;
 }
 
 static int lua__new(lua_State *L)
 {
+	double ptr;
 	IUINT32 conv = (IUINT32)luaL_checknumber(L, 1);
 	luaL_checktype(L, 2, LUA_TFUNCTION);
 	ikcpcb *peer = ikcp_create(conv, L);
-	peer->output = udp_output;
+	ptr = (double)(int64_t)peer;
+	peer->output = output_cb;
 	LUA_BIND_META(L, ikcpcb, peer, LIKCP_PEER_NAME);
 	lua_newtable(L);
+	do {
+		lua_pushvalue(L, 2);
+		lua_setfield(L, -2, LIKCP_OUTPUT_CB);
+	} while(0);
 	lua_setfenv(L, -2);
 
-	lua_pushvalue(L, 2);
-	lua_setfield(L, -2, LIKCP_OUTPUT_CB);
 
 	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, conv);
+	lua_pushnumber(L, ptr);
 	lua_pushvalue(L, -3);
 	lua_rawset(L, -3);
 	lua_pop(L, 1);
@@ -135,10 +199,10 @@ static int lua__new(lua_State *L)
 static int lua__gc(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
-	IUINT32 conv = peer->conv;
+	double ptr = (double)(int64_t)peer;
 
 	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, conv);
+	lua_pushnumber(L, ptr);
 	lua_pushnil(L);
 	lua_rawset(L, -3);
 
@@ -209,7 +273,6 @@ static int lua__waitsnd(lua_State *L)
 	lua_pushinteger(L, cnt);
 	return 1;
 }
-
 
 static int lua__check(lua_State *L)
 {
@@ -310,7 +373,7 @@ static int opencls__peer(lua_State *L)
 		{"log", lua__log},
 		{NULL, NULL},
 	};
-	luaL_newmetatable(L, "peer");
+	luaL_newmetatable(L, LIKCP_PEER_NAME);
 	lua_newtable(L);
 	luaL_register(L, NULL, lmethods);
 	lua_setfield(L, -2, "__index");
@@ -328,10 +391,18 @@ static int luac__register_logmask(lua_State *L)
 	return 1;
 }
 
+static int lua__clock(lua_State *L)
+{
+	lua_pushnumber(L, iclock());
+	return 1;
+}
+
 int luaopen_lkcp(lua_State* L)
 {
 	luaL_Reg lfuncs[] = {
 		{"new", lua__new},
+		{"clock", lua__clock},
+		{"sleep", lua__sleep},
 		{NULL, NULL},
 	};
 #if LUA_VERSION_NUM < 502
