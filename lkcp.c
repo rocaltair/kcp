@@ -144,11 +144,11 @@ static int output_cb(const char *buf, int len, ikcpcb *peer, void *user)
 	lua_State * L = get_main_state(sL);
 	int top;
 	int ret = -1;
-	double ptr = (double)(int64_t)peer;
+	lua_Integer ptr = (lua_Integer)peer;
 	assert(L != NULL);
 	top = lua_gettop(L);
-	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, ptr);
+	lua_getfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
+	lua_pushinteger(L, ptr);
 	lua_rawget(L, -2);
 	if (lua_type(L, -1) != LUA_TUSERDATA) {
 		goto finished;
@@ -172,11 +172,11 @@ finished:
 
 static int lua__new(lua_State *L)
 {
-	double ptr;
+	lua_Integer ptr;
 	IUINT32 conv = (IUINT32)luaL_checknumber(L, 1);
 	luaL_checktype(L, 2, LUA_TFUNCTION);
 	ikcpcb *peer = ikcp_create(conv, L);
-	ptr = (double)(int64_t)peer;
+	ptr = (lua_Integer)peer;
 	peer->output = output_cb;
 	LUA_BIND_META(L, ikcpcb, peer, LIKCP_PEER_NAME);
 	lua_newtable(L);
@@ -187,8 +187,8 @@ static int lua__new(lua_State *L)
 	lua_setfenv(L, -2);
 
 
-	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, ptr);
+	lua_getfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
+	lua_pushinteger(L, ptr);
 	lua_pushvalue(L, -3);
 	lua_rawset(L, -3);
 	lua_pop(L, 1);
@@ -199,10 +199,10 @@ static int lua__new(lua_State *L)
 static int lua__gc(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
-	double ptr = (double)(int64_t)peer;
+	lua_Integer ptr = (lua_Integer)peer;
 
-	lua_getfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
-	lua_pushnumber(L, ptr);
+	lua_getfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
+	lua_pushinteger(L, ptr);
 	lua_pushnil(L);
 	lua_rawset(L, -3);
 
