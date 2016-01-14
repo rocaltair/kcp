@@ -413,7 +413,7 @@ int luaopen_lkcp(lua_State* L)
 
 	/* to save peer */
 	lua_newtable(L);
-	lua_setfield(L, LUA_ENVIRONINDEX, LIKCP_PEER_MAP);
+	lua_setfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
 
 	opencls__peer(L);
 	luaL_newlib(L, lfuncs);
