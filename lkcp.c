@@ -22,9 +22,6 @@
 
 #if LUA_VERSION_NUM < 502
 # define luaL_newlib(L,l) (lua_newtable(L), luaL_register(L,NULL,l))
-# ifndef LUA_RIDX_MAINTHREAD
-#  define LUA_RIDX_MAINTHREAD      1
-# endif
 #endif
 
 #define LIKCP_PEER_NAME "kcp_cls{peer}"
@@ -77,7 +74,7 @@
 
 static int lua__sleep(lua_State *L)
 {
-        int ms = luaL_optinteger(L, 1, 0);
+        int ms = (int)luaL_optinteger(L, 1, 0);
 #if defined(WIN32) || defined(_WIN32)
         Sleep(ms);
 #else
@@ -129,19 +126,9 @@ static uint32_t iclock()
 }
 
 
-static lua_State * get_main_state(lua_State *L)
-{
-	lua_rawgeti(L,  LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
-	lua_State *mL = lua_tothread(L, -1);
-	lua_pop(L, 1);
-	return mL;
-}
-
 static int output_cb(const char *buf, int len, ikcpcb *peer, void *user)
 {
-	lua_State * sL = user;
-	/* main State */
-	lua_State * L = get_main_state(sL);
+	lua_State * L = user;
 	int top;
 	int ret = -1;
 	lua_Integer ptr = (lua_Integer)peer;
@@ -215,6 +202,7 @@ static int lua__recv(lua_State *L)
 {
 	char buffer[BUFFER_SIZE];
 	ikcpcb *peer = CHECK_PEER(L, 1);
+	peer->user = L;
 	int len = ikcp_recv(peer, buffer, sizeof(buffer));
 	if (len >= 0) {
 		lua_pushlstring(L, buffer, len);
@@ -229,9 +217,9 @@ static int lua__wndsize(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
 	/* IKCP_WND_SND = 32 */
-	int sndwnd = luaL_optinteger(L, 2, 32);
+	int sndwnd = (int)luaL_optinteger(L, 2, 32);
 	/* IKCP_WND_RCV = 32 */
-	int rcvwnd = luaL_optinteger(L, 3, 32);
+	int rcvwnd = (int)luaL_optinteger(L, 3, 32);
 	ikcp_wndsize(peer, sndwnd, rcvwnd);
 	return 0;
 }
@@ -239,11 +227,11 @@ static int lua__wndsize(lua_State *L)
 static int lua__nodelay(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
-	int nodelay = luaL_optinteger(L, 2, 0);
+	int nodelay = (int)luaL_optinteger(L, 2, 0);
 	/* IKCP_INTERVAL = 100 */
-	int interval = luaL_optinteger(L, 3, 100);
-	int resend = luaL_optinteger(L, 4, 0);
-	int nc = luaL_optinteger(L, 5, 0);
+	int interval = (int)luaL_optinteger(L, 3, 100);
+	int resend = (int)luaL_optinteger(L, 4, 0);
+	int nc = (int)luaL_optinteger(L, 5, 0);
 	ikcp_nodelay(peer, nodelay, interval, resend, nc);
 	return 0;
 }
@@ -253,6 +241,7 @@ static int lua__send(lua_State *L)
 	size_t sz;
 	ikcpcb *peer = CHECK_PEER(L, 1);
 	const char * buffer = luaL_checklstring(L, 2, &sz);
+	peer->user = L;
 	ikcp_send(peer, buffer, sz);
 	return 0;
 }
@@ -261,7 +250,7 @@ static int lua__setmtu(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
 	/* IKCP_MTU_DEF = 1400 */
-	int mtu = luaL_optinteger(L, 2, 1400);
+	int mtu = (int)luaL_optinteger(L, 2, 1400);
 	ikcp_setmtu(peer, mtu);
 	return 0;
 }
@@ -335,7 +324,7 @@ static int lua__flush(lua_State *L)
 static int lua__log(lua_State *L)
 {
 	ikcpcb *peer = CHECK_PEER(L, 1);
-	int mask = luaL_checkinteger(L, 2);
+	int mask = (int)luaL_checkinteger(L, 2);
 	const char * msg = luaL_checkstring(L, 3);
 	ikcp_log(peer, mask, "%s", msg);
 	return 0;
@@ -405,15 +394,11 @@ int luaopen_lkcp(lua_State* L)
 		{"sleep", lua__sleep},
 		{NULL, NULL},
 	};
-#if LUA_VERSION_NUM < 502
-	/* you should call this in main thread*/
-	assert(lua_pushthread(L));
-	lua_rawseti(L,  LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
-#endif
-
 	/* to save peer */
+	lua_pushstring(L, LIKCP_PEER_MAP);
 	lua_newtable(L);
-	lua_setfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
+	/* lua_setfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP); */
+	lua_settable(L, LUA_REGISTRYINDEX);
 
 	opencls__peer(L);
 	luaL_newlib(L, lfuncs);
@@ -421,3 +406,4 @@ int luaopen_lkcp(lua_State* L)
 	lua_setfield(L, -2, "LogMask");
 	return 1;
 }
+
