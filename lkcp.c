@@ -21,7 +21,15 @@
 #endif
 
 #if LUA_VERSION_NUM < 502
-# define luaL_newlib(L,l) (lua_newtable(L), luaL_register(L,NULL,l))
+# ifndef luaL_newlib
+#  define luaL_newlib(L,l) (lua_newtable(L), luaL_register(L,NULL,l))
+# endif
+# ifndef lua_setuservalue
+#  define lua_setuservalue(L, n) lua_setfenv(L, n)
+# endif
+# ifndef lua_getuservalue
+#  define lua_getuservalue(L, n) lua_getfenv(L, n)
+# endif
 #endif
 
 #define LIKCP_PEER_NAME "kcp_cls{peer}"
@@ -140,7 +148,7 @@ static int output_cb(const char *buf, int len, ikcpcb *peer, void *user)
 	if (lua_type(L, -1) != LUA_TUSERDATA) {
 		goto finished;
 	}
-	lua_getfenv(L, -1);
+	lua_getuservalue(L, -1);
 	if (!lua_istable(L, -1)) {
 		goto finished;
 	}
@@ -171,7 +179,7 @@ static int lua__new(lua_State *L)
 		lua_pushvalue(L, 2);
 		lua_setfield(L, -2, LIKCP_OUTPUT_CB);
 	} while(0);
-	lua_setfenv(L, -2);
+	lua_setuservalue(L, -2);
 
 
 	lua_getfield(L, LUA_REGISTRYINDEX, LIKCP_PEER_MAP);
@@ -363,8 +371,7 @@ static int opencls__peer(lua_State *L)
 		{NULL, NULL},
 	};
 	luaL_newmetatable(L, LIKCP_PEER_NAME);
-	lua_newtable(L);
-	luaL_register(L, NULL, lmethods);
+	luaL_newlib(L, lmethods);
 	lua_setfield(L, -2, "__index");
 	lua_pushcfunction (L, lua__gc);
 	lua_setfield (L, -2, "__gc");
